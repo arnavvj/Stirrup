@@ -233,14 +233,18 @@ def _sync_files_incremental(src: Path, dst: Path) -> None:
     Comparison is by mtime + size (rsync heuristic). dst is updated in-place and
     never deleted first, so the existing cache remains valid if interrupted.
 
+    Symlinks are not followed to avoid loops; non-regular files (sockets, devices,
+    named pipes) are skipped since they cannot be meaningfully cached.
+
     Args:
         src: Source directory (execution environment temp dir).
         dst: Destination directory (cache files dir).
     """
     dst.mkdir(parents=True, exist_ok=True)
 
-    # Pass 1: copy new or modified files from src -> dst
-    for src_root_str, _dirnames, filenames in os.walk(src):
+    # Pass 1: copy new or modified regular files from src -> dst
+    # followlinks=False prevents infinite loops from symlink cycles in the exec env
+    for src_root_str, _dirnames, filenames in os.walk(src, followlinks=False):
         src_root = Path(src_root_str)
         rel = src_root.relative_to(src)
         dst_root = dst / rel
@@ -248,6 +252,10 @@ def _sync_files_incremental(src: Path, dst: Path) -> None:
 
         for filename in filenames:
             src_file = src_root / filename
+            # Skip non-regular files (sockets, devices, named pipes, symlinks)
+            # shutil.copy2 cannot handle these and they carry no cacheable state
+            if not src_file.is_file():
+                continue
             dst_file = dst_root / filename
             if dst_file.exists():
                 src_stat = os.stat(src_file)
