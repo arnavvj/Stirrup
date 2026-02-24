@@ -6,6 +6,7 @@ import inspect
 import logging
 import re
 import signal
+import uuid
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from itertools import chain, takewhile
@@ -639,10 +640,23 @@ class Agent[FinishParams: BaseModel, FinishMeta]:
 
         current_depth = _PARENT_DEPTH.get()
 
+        # Resolve session-scoped output directory.
+        # Root sessions (depth == 0) get a per-session subdirectory so that
+        # concurrent sessions sharing the same output_dir never overwrite each other.
+        # Subagent sessions keep output_dir unchanged — it is a path inside the
+        # parent's exec env sandbox which is already isolated.
+        session_output_dir: str | None = None
+        if self._pending_output_dir and current_depth == 0:
+            session_id = uuid.uuid4().hex[:8]
+            session_output_dir = str(self._pending_output_dir / f"session-{session_id}")
+            logger.info("[%s] Session output directory: %s", self._name, session_output_dir)
+        elif self._pending_output_dir:
+            session_output_dir = str(self._pending_output_dir)
+
         # Create session state and store in ContextVar
         state = SessionState(
             exit_stack=exit_stack,
-            output_dir=str(self._pending_output_dir) if self._pending_output_dir else None,
+            output_dir=session_output_dir,
             parent_exec_env=parent_state.exec_env if parent_state else None,
             depth=current_depth,
             logger=self._logger,
