@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from stirrup.constants import FINISH_TOOL_NAME
 from stirrup.core.agent import Agent
+from stirrup.tools.code_backends.local import LocalCodeExecToolProvider
 from stirrup.core.models import (
     AssistantMessage,
     ChatMessage,
@@ -628,3 +629,66 @@ async def test_concurrent_sessions_get_distinct_subdirs(tmp_path: Path) -> None:
     assert len(actual_dirs) == 2
     assert all("session-" in d for d in actual_dirs)
     assert actual_dirs[0] != actual_dirs[1], "Concurrent sessions must get distinct subdirectories"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for _resolve_input_files
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_input_files_glob_returns_matches(tmp_path: Path) -> None:
+    """_resolve_input_files expands a glob pattern to the matching file paths."""
+    (tmp_path / "a.csv").write_text("a")
+    (tmp_path / "b.csv").write_text("b")
+    (tmp_path / "other.txt").write_text("x")
+
+    agent = Agent(client=MockLLMClient(responses=[]), name="test_agent", tools=[])
+    resolved = agent._resolve_input_files(str(tmp_path / "*.csv"))  # noqa: SLF001
+
+    assert sorted(p.name for p in resolved) == ["a.csv", "b.csv"]
+
+
+def test_resolve_input_files_empty_glob_raises(tmp_path: Path) -> None:
+    """_resolve_input_files raises ValueError when a glob pattern matches no files."""
+    agent = Agent(client=MockLLMClient(responses=[]), name="test_agent", tools=[])
+
+    with pytest.raises(ValueError, match="matched no files"):
+        agent._resolve_input_files(str(tmp_path / "*.csv"))  # noqa: SLF001
+
+
+def test_resolve_input_files_non_glob_passthrough(tmp_path: Path) -> None:
+    """_resolve_input_files returns non-glob paths as-is without checking existence."""
+    nonexistent = tmp_path / "no_such_file.txt"
+
+    agent = Agent(client=MockLLMClient(responses=[]), name="test_agent", tools=[])
+    resolved = agent._resolve_input_files(nonexistent)  # noqa: SLF001
+
+    assert resolved == [nonexistent]
+
+
+def test_resolve_input_files_mixed_list(tmp_path: Path) -> None:
+    """_resolve_input_files handles a list mixing glob patterns and plain paths."""
+    (tmp_path / "a.csv").write_text("a")
+    plain = tmp_path / "plain.txt"
+    plain.write_text("p")
+
+    agent = Agent(client=MockLLMClient(responses=[]), name="test_agent", tools=[])
+    resolved = agent._resolve_input_files([str(tmp_path / "*.csv"), plain])  # noqa: SLF001
+
+    assert sorted(p.name for p in resolved) == ["a.csv", "plain.txt"]
+
+
+async def test_session_empty_glob_raises_before_run(tmp_path: Path) -> None:
+    """session() raises ValueError at entry if an input_files glob matches nothing."""
+    agent = Agent(
+        client=MockLLMClient(responses=[]),
+        name="test_agent",
+        tools=[LocalCodeExecToolProvider()],
+    )
+
+    with pytest.raises(ValueError, match="matched no files"):
+        async with agent.session(
+            output_dir=tmp_path,
+            input_files=str(tmp_path / "*.csv"),  # no CSV files exist
+        ):
+            pass  # should never reach here
