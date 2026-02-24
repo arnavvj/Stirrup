@@ -1,5 +1,8 @@
 """Tests for agent core functionality."""
 
+import asyncio
+from pathlib import Path
+
 import pytest
 from pydantic import BaseModel
 
@@ -558,3 +561,70 @@ async def test_agent_unique_tool_names_ok() -> None:
 
     assert finish_params is not None
     assert finish_params.reason == "done"
+
+
+async def test_session_output_dir_gets_session_subdir(tmp_path: Path) -> None:
+    """A root session with output_dir resolves to a session-<id> subdirectory."""
+    client = MockLLMClient(
+        responses=[
+            AssistantMessage(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        name=FINISH_TOOL_NAME,
+                        arguments='{"reason": "done", "paths": []}',
+                        tool_call_id="call_1",
+                    )
+                ],
+                token_usage=TokenUsage(input=10, answer=5),
+            )
+        ]
+    )
+    agent = Agent(client=client, name="test_agent", tools=[])
+
+    async with agent.session(output_dir=tmp_path) as session:
+        await session.run("go")
+
+    # After session exit, _logger.output_dir reflects the actual per-session path used
+    actual_output_dir = agent._logger.output_dir  # noqa: SLF001
+    assert actual_output_dir is not None
+    assert "session-" in actual_output_dir
+    # Must be a direct subdirectory of the given output_dir
+    assert Path(actual_output_dir).parent == tmp_path
+
+
+async def test_concurrent_sessions_get_distinct_subdirs(tmp_path: Path) -> None:
+    """Two concurrent sessions with the same output_dir receive distinct session-<id> subdirs."""
+
+    def make_client() -> MockLLMClient:
+        return MockLLMClient(
+            responses=[
+                AssistantMessage(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name=FINISH_TOOL_NAME,
+                            arguments='{"reason": "done", "paths": []}',
+                            tool_call_id="call_1",
+                        )
+                    ],
+                    token_usage=TokenUsage(input=10, answer=5),
+                )
+            ]
+        )
+
+    agent_a = Agent(client=make_client(), name="agent_a", tools=[])
+    agent_b = Agent(client=make_client(), name="agent_b", tools=[])
+
+    actual_dirs: list[str] = []
+
+    async def run_session(agent: Agent) -> None:
+        async with agent.session(output_dir=tmp_path) as session:
+            await session.run("go")
+        actual_dirs.append(agent._logger.output_dir)  # noqa: SLF001
+
+    await asyncio.gather(run_session(agent_a), run_session(agent_b))
+
+    assert len(actual_dirs) == 2
+    assert all("session-" in d for d in actual_dirs)
+    assert actual_dirs[0] != actual_dirs[1], "Concurrent sessions must get distinct subdirectories"
