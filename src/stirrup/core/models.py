@@ -252,10 +252,11 @@ class Addable(Protocol):
 
 def _aggregate_list[T: Addable](metadata_list: list[T]) -> T | None:
     """Aggregate a list of metadata using __add__."""
-    if not metadata_list:
+    addable = [item for item in metadata_list if isinstance(item, Addable)]
+    if not addable:
         return None
-    aggregated = metadata_list[0]
-    for m in metadata_list[1:]:
+    aggregated = addable[0]
+    for m in addable[1:]:
         aggregated = aggregated + m
     return aggregated
 

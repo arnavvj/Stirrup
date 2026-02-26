@@ -352,3 +352,27 @@ def test_load_state_corrupted_manifest_no_warning(
 
     assert result is not None
     assert not any(r.levelno >= logging.WARNING for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Regression: _aggregate_list crash on resumed sessions
+# ---------------------------------------------------------------------------
+
+
+def test_aggregate_metadata_on_restored_run_metadata_does_not_crash() -> None:
+    """Regression: aggregate_metadata must not crash on run_metadata restored from JSON (plain dicts).
+
+    CacheState.from_dict assigns run_metadata verbatim from the JSON blob, so every metadata
+    item is a plain dict rather than a Pydantic Addable model. _aggregate_list must not crash
+    with TypeError when it encounters these non-Addable items.
+    """
+    from stirrup.core.models import aggregate_metadata
+
+    # Simulate what CacheState.from_dict produces: raw JSON dicts, not Pydantic models
+    raw_metadata: dict = {
+        "token_usage": [{"input": 10, "output": 5, "reasoning": 0, "cache_read": 0, "cache_write": 0}]
+    }
+
+    # Should not raise TypeError even though items are plain dicts (not Addable)
+    result = aggregate_metadata(raw_metadata, return_json_serializable=False)
+    assert isinstance(result, dict)
