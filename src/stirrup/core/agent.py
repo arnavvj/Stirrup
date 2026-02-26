@@ -1420,20 +1420,6 @@ class Agent[FinishParams: BaseModel, FinishMeta]:
                     metadata=error_metadata,
                 )
             finally:
-                # DEBUG: Log SESSION_STATE after subagent session
-                post_session_state = _SESSION_STATE.get(None)
-                logger.debug(
-                    "[%s] POST-SESSION: _SESSION_STATE=%s, exec_env=%s, exec_env._temp_dir=%s",
-                    agent.name,
-                    id(post_session_state) if post_session_state else None,
-                    type(post_session_state.exec_env).__name__
-                    if post_session_state and post_session_state.exec_env
-                    else None,
-                    getattr(post_session_state.exec_env, "_temp_dir", "N/A")
-                    if post_session_state and post_session_state.exec_env
-                    else None,
-                )
-
                 # Restore parent's depth
                 _PARENT_DEPTH.reset(prev_depth)
                 # Restore parent's session state so next sibling subagent sees it
