@@ -1409,7 +1409,7 @@ class Agent[FinishParams: BaseModel, FinishMeta]:
                     return ToolResult(content=result_content, metadata=sub_metadata)
 
             except Exception as e:
-                # On error, return empty metadata
+                logger.exception("Sub-agent '%s' raised an unhandled exception", agent.name)
                 error_metadata = SubAgentMetadata(
                     message_history=[],
                     run_metadata={},
