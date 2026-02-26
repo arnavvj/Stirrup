@@ -1,14 +1,16 @@
 """Tests for agent core functionality."""
 
 import asyncio
+import logging
 from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
 
 from stirrup.constants import FINISH_TOOL_NAME
-from stirrup.core.agent import Agent
+from stirrup.core.agent import Agent, _PARENT_DEPTH
 from stirrup.tools.code_backends.local import LocalCodeExecToolProvider
+from stirrup.utils.logging import AgentLoggerBase
 from stirrup.core.models import (
     AssistantMessage,
     ChatMessage,
@@ -43,6 +45,57 @@ class MockLLMClient(LLMClient):
         response = self.responses[self.call_count]
         self.call_count += 1
         return response
+
+
+class NullAgentLogger(AgentLoggerBase):
+    """No-op logger for tests that need nested agent sessions without Rich display conflicts."""
+
+    name: str = ""
+    model: str | None = None
+    max_turns: int | None = None
+    depth: int = 0
+    finish_params = None
+    run_metadata = None
+    output_dir: str | None = None
+
+    def __enter__(self) -> "NullAgentLogger":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:  # noqa: ANN001
+        pass
+
+    def on_step(self, step: int, tool_calls: int = 0, input_tokens: int = 0, output_tokens: int = 0) -> None:  # noqa: ARG002
+        pass
+
+    def assistant_message(self, turn: int, max_turns: int, assistant_message: AssistantMessage) -> None:  # noqa: ARG002
+        pass
+
+    def user_message(self, user_message: UserMessage) -> None:  # noqa: ARG002
+        pass
+
+    def task_message(self, task) -> None:  # noqa: ARG002, ANN001
+        pass
+
+    def tool_result(self, tool_message) -> None:  # noqa: ARG002, ANN001
+        pass
+
+    def context_summarization_start(self, pct_used: float, cutoff: float) -> None:  # noqa: ARG002
+        pass
+
+    def context_summarization_complete(self, summary: str, bridge: str) -> None:  # noqa: ARG002
+        pass
+
+    def debug(self, message: str, *args: object) -> None:  # noqa: ARG002
+        pass
+
+    def info(self, message: str, *args: object) -> None:  # noqa: ARG002
+        pass
+
+    def warning(self, message: str, *args: object) -> None:  # noqa: ARG002
+        pass
+
+    def error(self, message: str, *args: object) -> None:  # noqa: ARG002
+        pass
 
 
 async def test_agent_basic_finish() -> None:
@@ -692,3 +745,180 @@ async def test_session_empty_glob_raises_before_run(tmp_path: Path) -> None:
             input_files=str(tmp_path / "*.csv"),  # no CSV files exist
         ):
             pass  # should never reach here
+
+
+# ---------------------------------------------------------------------------
+# Sub-agent edge case tests
+# ---------------------------------------------------------------------------
+
+
+async def test_subagent_with_code_exec_requires_parent_code_exec() -> None:
+    """Parent without code exec raises ValueError at session entry if subagent has one."""
+    # Sub-agent HAS a code exec tool
+    sub_agent = Agent(
+        client=MockLLMClient(responses=[]),
+        name="sub_agent",
+        tools=[LocalCodeExecToolProvider()],
+    )
+    # Parent does NOT have a code exec tool
+    parent_agent = Agent(
+        client=MockLLMClient(responses=[]),
+        name="parent_agent",
+        tools=[sub_agent.to_tool(description="sub")],
+    )
+
+    with pytest.raises(ValueError, match="code execution tool"):
+        async with parent_agent.session():
+            pass
+
+
+async def test_deeply_nested_subagent_runs_successfully() -> None:
+    """A 3-level agent chain (root→child→grandchild) runs without error."""
+
+    def make_finish_client() -> MockLLMClient:
+        return MockLLMClient(
+            responses=[
+                AssistantMessage(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name=FINISH_TOOL_NAME,
+                            arguments='{"reason": "done", "paths": []}',
+                            tool_call_id="call_1",
+                        )
+                    ],
+                    token_usage=TokenUsage(input=10, answer=5),
+                )
+            ]
+        )
+
+    grandchild_client = make_finish_client()
+    grandchild = Agent(client=grandchild_client, name="grandchild", tools=[], logger=NullAgentLogger())
+
+    child_client = MockLLMClient(
+        responses=[
+            AssistantMessage(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        name="grandchild",
+                        arguments='{"task": "do something"}',
+                        tool_call_id="call_1",
+                    )
+                ],
+                token_usage=TokenUsage(input=10, answer=5),
+            ),
+            AssistantMessage(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        name=FINISH_TOOL_NAME,
+                        arguments='{"reason": "done", "paths": []}',
+                        tool_call_id="call_2",
+                    )
+                ],
+                token_usage=TokenUsage(input=10, answer=5),
+            ),
+        ]
+    )
+    child = Agent(
+        client=child_client,
+        name="child",
+        tools=[grandchild.to_tool(description="grandchild agent")],
+        logger=NullAgentLogger(),
+    )
+
+    root_client = MockLLMClient(
+        responses=[
+            AssistantMessage(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        name="child",
+                        arguments='{"task": "do something"}',
+                        tool_call_id="call_1",
+                    )
+                ],
+                token_usage=TokenUsage(input=10, answer=5),
+            ),
+            AssistantMessage(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        name=FINISH_TOOL_NAME,
+                        arguments='{"reason": "done", "paths": []}',
+                        tool_call_id="call_2",
+                    )
+                ],
+                token_usage=TokenUsage(input=10, answer=5),
+            ),
+        ]
+    )
+    root = Agent(
+        client=root_client,
+        name="root",
+        tools=[child.to_tool(description="child agent")],
+        logger=NullAgentLogger(),
+    )
+
+    async with root.session() as session:
+        finish_params, _, _ = await session.run("do something")
+
+    assert finish_params is not None
+    assert grandchild_client.call_count == 1  # grandchild was actually invoked
+
+
+async def test_subagent_without_parent_exec_env_warns(
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    """Subagent at depth>0 with exec_env but no parent_exec_env emits WARNING, not exception."""
+    # Two-step responses: first create a file, then finish referencing it.
+    # The file must exist in the exec env for finish tool validation to pass,
+    # which ensures paths is non-empty and the warning code path is reached.
+    # NullAgentLogger is required so pytest caplog captures the stdlib logger.warning()
+    # call. The default AgentLogger installs a RichHandler that clears caplog's handler.
+    sub_agent = Agent(
+        client=MockLLMClient(
+            responses=[
+                AssistantMessage(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="code_exec",
+                            arguments='{"cmd": "echo hello > output.txt"}',
+                            tool_call_id="call_1",
+                        )
+                    ],
+                    token_usage=TokenUsage(input=10, answer=5),
+                ),
+                AssistantMessage(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name=FINISH_TOOL_NAME,
+                            arguments='{"reason": "done", "paths": ["output.txt"]}',
+                            tool_call_id="call_2",
+                        )
+                    ],
+                    token_usage=TokenUsage(input=10, answer=5),
+                ),
+            ]
+        ),
+        name="sub_agent",
+        tools=[LocalCodeExecToolProvider()],
+        logger=NullAgentLogger(),
+    )
+
+    # Force depth=1 so __aenter__ treats this as a subagent session.
+    # _SESSION_STATE has no parent state → parent_exec_env will be None.
+    token = _PARENT_DEPTH.set(1)
+    try:
+        with caplog.at_level(logging.WARNING, logger="stirrup.core.agent"):
+            async with sub_agent.session(output_dir=tmp_path) as session:
+                await session.run("go")
+    finally:
+        _PARENT_DEPTH.reset(token)
+
+    # Should emit the warning about missing parent_exec_env, but NOT raise an exception
+    assert any("no parent_exec_env" in r.message for r in caplog.records)
