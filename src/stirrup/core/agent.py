@@ -1409,7 +1409,7 @@ class Agent[FinishParams: BaseModel, FinishMeta]:
                     return ToolResult(content=result_content, metadata=sub_metadata)
 
             except Exception as e:
-                # On error, return empty metadata
+                logger.exception("Sub-agent '%s' raised an unhandled exception", agent.name)
                 error_metadata = SubAgentMetadata(
                     message_history=[],
                     run_metadata={},
@@ -1420,20 +1420,6 @@ class Agent[FinishParams: BaseModel, FinishMeta]:
                     metadata=error_metadata,
                 )
             finally:
-                # DEBUG: Log SESSION_STATE after subagent session
-                post_session_state = _SESSION_STATE.get(None)
-                logger.debug(
-                    "[%s] POST-SESSION: _SESSION_STATE=%s, exec_env=%s, exec_env._temp_dir=%s",
-                    agent.name,
-                    id(post_session_state) if post_session_state else None,
-                    type(post_session_state.exec_env).__name__
-                    if post_session_state and post_session_state.exec_env
-                    else None,
-                    getattr(post_session_state.exec_env, "_temp_dir", "N/A")
-                    if post_session_state and post_session_state.exec_env
-                    else None,
-                )
-
                 # Restore parent's depth
                 _PARENT_DEPTH.reset(prev_depth)
                 # Restore parent's session state so next sibling subagent sees it

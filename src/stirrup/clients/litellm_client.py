@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 try:
     from litellm import acompletion
-    from litellm.exceptions import APIConnectionError, RateLimitError, Timeout
+    from litellm.exceptions import APIConnectionError, InternalServerError, RateLimitError, Timeout
 except ImportError as e:
     raise ImportError(
         "Requires installation of the litellm extra. "
@@ -95,7 +95,7 @@ class LiteLLMClient(LLMClient):
         return self._model
 
     @retry(
-        retry=retry_if_exception_type((Timeout, APIConnectionError, RateLimitError)),
+        retry=retry_if_exception_type((Timeout, APIConnectionError, RateLimitError, InternalServerError)),
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10),
     )
