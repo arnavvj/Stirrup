@@ -294,7 +294,6 @@ class TestOpenResponsesClient:
         assert client.model_slug == "gpt-4o"
         assert client.max_tokens == 50000
 
-    @pytest.mark.asyncio
     async def test_generate_basic(self) -> None:
         """Test basic generation with mocked response."""
         client = OpenResponsesClient(
@@ -329,7 +328,6 @@ class TestOpenResponsesClient:
         assert result.token_usage.input == 10
         assert result.token_usage.answer == 5
 
-    @pytest.mark.asyncio
     async def test_generate_with_tools(self) -> None:
         """Test generation with tool calls."""
         from stirrup.core.models import EmptyParams, Tool, ToolResult
@@ -372,7 +370,6 @@ class TestOpenResponsesClient:
         assert result.tool_calls[0].name == "get_time"
         assert result.tool_calls[0].tool_call_id == "call_xyz"
 
-    @pytest.mark.asyncio
     async def test_generate_with_reasoning_tokens(self) -> None:
         """Test that reasoning tokens are properly extracted."""
         client = OpenResponsesClient(
@@ -412,7 +409,6 @@ class TestOpenResponsesClient:
         assert result.token_usage.reasoning == 80
         assert result.token_usage.answer == 20  # 100 - 80
 
-    @pytest.mark.asyncio
     async def test_generate_incomplete_raises_error(self) -> None:
         """Test that incomplete response raises ContextOverflowError."""
         from stirrup.core.exceptions import ContextOverflowError
@@ -436,7 +432,6 @@ class TestOpenResponsesClient:
                 tools={},
             )
 
-    @pytest.mark.asyncio
     async def test_instructions_from_system_message(self) -> None:
         """Test that SystemMessage is passed as instructions parameter."""
         client = OpenResponsesClient(
@@ -475,7 +470,6 @@ class TestOpenResponsesClient:
         # Verify input doesn't contain the system message
         assert all(item.get("role") != "system" for item in call_kwargs["input"])
 
-    @pytest.mark.asyncio
     async def test_default_instructions_fallback(self) -> None:
         """Test that default instructions are used when no SystemMessage provided."""
         client = OpenResponsesClient(
